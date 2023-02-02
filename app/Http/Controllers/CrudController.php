@@ -10,10 +10,17 @@ use Illuminate\Support\Facades\Validator;
 
 class CrudController extends Controller
 {
+    public function getFirstRoute(){
+        $routes = MyRoute::with(['route_stages.stage'])->skip(0)->take(1)
+        ->orderBy('name', 'ASC')->get();
+        return response()->json(['routes' => $routes]);
+    }
     public function getRoutes(Request $request){
         $page = $request->has('page') ? intval($request->page) : 1;
         $offset = ($page-1) * 20;
-        $routes = MyRoute::skip($offset)->take(20)->get();
+        $routes = MyRoute::where('name', 'LIKE', '%'.$request->search.'%')
+        ->with(['route_stages.stage'])->skip($offset)->take(20)
+        ->orderBy('name', 'ASC')->get();
         return response()->json(['routes' => $routes]);
     }
 
@@ -21,7 +28,8 @@ class CrudController extends Controller
         $validator = Validator::make($request->all(), [
             'id' => 'required|integer|min:0',
             'name' => 'required|string|max:255|unique:my_routes,name,' . $request->id,
-            "description" => "string|nullable"
+            "description" => "string|nullable",
+            "distance"=>"numeric|nullable"
         ]);
         if($validator->fails()){
             return response()->json(['errors' => $validator->messages()], 400);
@@ -35,22 +43,17 @@ class CrudController extends Controller
         }
         $route->name = $request->name;
         $route->description = $request->description;
+        $route->distance = $request->distance;
         if($route->save()){
             return response()->json(['success' => "Route updated successfully"]);
         }else{
             return response()->json(['error' => 'Unable to update route!'], 401);
         }
     }
-    public function getRouteStages(Request $request){
-        $page = $request->has('page') ? intval($request->page) : 1;
-        $offset = ($page-1) * 20;
-        $routeStages = RouteStage::skip($offset)->take(20)->get();
-        return response()->json(['route_stages' => $routeStages]);
-    }
     public function getStages(Request $request){
         $page = $request->has('page') ? intval($request->page) : 1;
         $offset = ($page-1) * 20;
-        $stages = Stage::skip($offset)->take(20)->get();
+        $stages = Stage::where('name', 'LIKE', '%'.$request->search."%")->skip($offset)->take(20)->orderBy('name', 'ASC')->get();
         return response()->json(['stages' => $stages]);
     }
     public function addStage(Request $request){
@@ -78,5 +81,48 @@ class CrudController extends Controller
         }else{
             return response()->json(['error' => 'Unable to update stage!'], 401);
         }
+    }
+    public function getRouteStages(Request $request){
+        $page = $request->has('page') ? intval($request->page) : 1;
+        $offset = ($page-1) * 20;
+        $routeStages = RouteStage::with(['stage'])->where('my_route_id', $request->id)
+        ->whereHas('stage', function ($query) use ($request){
+            $query->where('name', 'like', '%'.$request->search.'%');
+        })->skip($offset)->take(20)->get();
+        return response()->json(['route_stages' => $routeStages]);
+    }
+    public function addRouteStages(Request $request){
+        $validator = Validator::make($request->all(), [
+            'id' => 'required|integer|min:1',
+            'stage_ids'=>'required|string',
+        ]);
+        if($validator->fails()){
+            return response()->json(['errors' => $validator->messages()], 400);
+        }
+        $stage_ids = explode(',',str_replace(']','',str_replace('[','',$request->stage_ids)));
+        foreach($stage_ids as $stage_id){
+            if(RouteStage::where('stage_id', $stage_id)->where('my_route_id', $request->id)->count() == 0){
+                $routeStage = new RouteStage;
+                $routeStage->my_route_id = $request->id;
+                $routeStage->stage_id = $stage_id;
+                $routeStage->save();
+            }
+        }
+        return response()->json(['success' => "Route Stage(s) updated successfully"]);
+    }
+
+    public function addTerminus(Request $request){
+        $validator = Validator::make($request->all(), [
+            'id' => 'required|integer|min:1',
+            'stage_id'=>'required|integer|min:1',
+            'status'=>'required|integer|min:0|max:2',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->messages()], 400);
+        }
+        RouteStage::where('my_route_id', $request->id)->where('status', $request->status)->update(["status"=>0]);
+        RouteStage::where('my_route_id', $request->id)->where('stage_id', $request->stage_id)
+            ->update(['status' => $request->status]);
+        return response()->json(['success' => "Terminus updated successfully"]);
     }
 }
